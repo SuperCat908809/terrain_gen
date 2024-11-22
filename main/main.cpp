@@ -32,7 +32,7 @@ __global__ void _kernel_calc_candidates(int width, int height, int* solids, int*
 	if (x <= width - 1)		if (solids[IDX(x + 1, y)] == 1) candidates_out[IDX(x, y)] = 1;
 	if (y > 0)				if (solids[IDX(x, y - 1)] == 1) candidates_out[IDX(x, y)] = 1;
 	if (y <= height - 1)	if (solids[IDX(x, y + 1)] == 1) candidates_out[IDX(x, y)] = 1;
-		}
+}
 
 __global__ void _kernel_calc_neighbour_distribs(int width, int height, int* solids, int* candidates, double* weights, double* neighbours_distrib_out) {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;
@@ -53,7 +53,7 @@ __global__ void _kernel_calc_neighbour_distribs(int width, int height, int* soli
 	if (y <= height - 1)	if (solids[IDX(x, y + 1)] == 0) neighbour_count++;
 
 	neighbours_distrib_out[IDX(x, y)] = weights[IDX(x, y)] / neighbour_count;
-		}
+}
 
 __global__ void _kernel_blur_iteration(
 	int width, int height,
@@ -81,7 +81,7 @@ __global__ void _kernel_blur_iteration(
 	if (y <= height - 1)	new_weight += neighbour_distribs[IDX(x,y+1)];
 
 	weights_out[IDX(x, y)] = new_weight;
-	}
+}
 
 class World {
 	int width, height;
@@ -101,26 +101,6 @@ class World {
 	}
 
 public:
-
-#if 0
-	std::vector<std::pair<int, int>> getNeighbourCoords(int x, int y) {
-		assert(0 <= x && x < width);
-		assert(0 <= y && y < height);
-
-		std::vector<std::pair<int, int>> list{};
-
-		for (int dx = std::max(0, x - 1); dx <= std::min(x + 1, width - 1); dx++) {
-			if (dx == x) continue;
-			list.push_back(std::make_pair(dx, y));
-		}
-		for (int dy = std::max(0, y - 1); dy <= std::min(y + 1, height - 1); dy++) {
-			if (dy == y) continue;
-			list.push_back(std::make_pair(x, dy));
-		}
-
-		return list;
-	}
-#endif
 
 	World(int width, int height) : width(width), height(height) {
 		assert(width > 0);
@@ -196,23 +176,10 @@ public:
 				double current_weight = GetCellCurrent(x, y);
 				int neighbours = getNeighbourCount(x, y);
 
-#if 0
-				bool skip = false;
-				for (auto& coord : neighbours) {
-					int neighbour_solid = GetCellSolid(std::get<0>(coord), std::get<1>(coord));
-					if (neighbour_solid == 1) {
-						GetCellNext(x, y) += current_weight;
-						skip = true;
-						break;
-					}
-				}
-				if (skip) continue;
-#else
 				if (neighboursSolidCell(x, y)) {
 					GetCellNext(x, y) += current_weight;
 					continue;
 				}
-#endif
 
 				double split_weight = current_weight / neighbours;
 
@@ -239,40 +206,6 @@ public:
 	}
 
 	void SelectNewSolidCell() {
-#if 0
-		std::vector<std::pair<std::pair<int, int>, double>> candidates{};
-
-		for (int y = 0; y < height; y++) {
-			for (int x = 0; x < width; x++) {
-				if (isCandidate(x, y)) {
-					candidates.push_back({ {x, y}, GetCellCurrent(x, y) });
-				}
-			}
-		}
-
-		// select candidate using reservoir sampling
-		double sum = 0.0;
-		double selected_weight = 0.0;
-		int selected_index = -1;
-
-		int i = 0;
-		for (auto candidate : candidates) {
-			sum += std::get<1>(candidate);
-
-			if (rand() / (double)RAND_MAX > selected_weight / sum) {
-				selected_index = i;
-				selected_weight = std::get<1>(candidate);
-			}
-
-			i++;
-		}
-
-		auto selected_coord = std::get<0>(candidates[selected_index]);
-
-		GetCellSolid(std::get<0>(selected_coord), std::get<1>(selected_coord)) = 1;
-
-		ResetCurrent();
-#else
 		double sum = 0.0;
 		double selected_weight = 0.0;
 		std::pair<int, int> selected_coord = std::make_pair(-1, -1);
@@ -301,7 +234,6 @@ public:
 		//std::cout << candidates << " candidates found\n";
 
 		GetCellSolid(std::get<0>(selected_coord), std::get<1>(selected_coord)) = 1;
-#endif
 	}
 
 	bool isCandidate(int x, int y) {
@@ -320,17 +252,10 @@ public:
 		assert(0 <= x && x < width);
 		assert(0 <= y && y < height);
 
-#if 0
-		auto neighbour_coords = getNeighbourCoords(x, y);
-		for (auto coord : neighbour_coords) {
-			if (GetCellSolid(std::get<0>(coord), std::get<1>(coord)) == 1) return true;
-		}
-#else
 		if (x > 0 && GetCellSolid(x - 1, y) == 1) return true;
 		if (y > 0 && GetCellSolid(x, y - 1) == 1) return true;
 		if (x < width - 1 && GetCellSolid(x + 1, y) == 1) return true;
 		if (y < height - 1 && GetCellSolid(x, y + 1) == 1) return true;
-#endif
 
 		return false;
 	}
