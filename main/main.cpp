@@ -368,7 +368,7 @@ int main() {
 
 		std::stringstream ss1{};
 		ss1 << std::setw(6) << std::setfill('0') << particle_iter;
-		std::string path1 = std::format("sim\\waves {}.jpg", ss1.str());
+		std::string path1 = "sim\\waves " + ss1.str() + ".jpg";
 		saveWorldToImage(world, path1);
 
 		std::cout << "Particle iter " << particle_iter + 1 << "\n";
