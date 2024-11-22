@@ -18,11 +18,16 @@
 #include <stb_image_write.h>
 
 
-
 const int world_width = 20;
 const int world_height = 20;
-const int blur_iterations = 10;
+const int blur_iterations = 200;
 const int particle_additions = 4;
+
+#define IDX(idx_x, idx_y) (world_width * (idx_y) + (idx_x))
+#define CEIL_DIV(num, denom) (((num) + (denom) - 1) / (denom))
+
+const dim3 threads = dim3(8, 8);
+const dim3 blocks = dim3(CEIL_DIV(world_width, threads.x), CEIL_DIV(world_height, threads.y));
 
 
 #if 0
@@ -323,12 +328,6 @@ __global__ void _kernel_blur_iteration(
 void write_image_to_file(int width, int height, int channels, const std::vector<uint8_t>& image, std::string path);
 void write_image_to_file(int width, int height, int channels, const std::vector<float>& image, std::string path);
 
-#define IDX(idx_x, idx_y) (world_width * (idx_y) + (idx_x))
-#define CEIL_DIV(num, denom) (((num) + (denom) - 1) / (denom))
-
-const dim3 threads = dim3(8, 8);
-const dim3 blocks = dim3(CEIL_DIV(threads.x, world_width), CEIL_DIV(threads.y, world_height));
-
 int main() {
 
 	int* d_solids{};
@@ -345,7 +344,7 @@ int main() {
 
 	{
 		std::vector<int> solids(world_width * world_height);
-		std::fill(solids.begin(), solids.end(), 0);
+		std::fill(solids.begin(), solids.end(), 2);
 		solids[IDX(world_width / 2, world_height / 2)] = 1;
 
 		assert(cudaSuccess == cudaMemcpy(d_solids, solids.data(), sizeof(int) * world_width * world_height, cudaMemcpyHostToDevice));
@@ -367,8 +366,15 @@ int main() {
 			std::vector<int> solids(world_width * world_height);
 			assert(cudaSuccess == cudaMemcpy(solids.data(), d_solids, sizeof(int) * solids.size(), cudaMemcpyDeviceToHost));
 
+			std::vector<float> image(world_width * world_height);
+			std::transform(solids.begin(), solids.end(), image.begin(), [](int s) { return s / 2.0f; });
+			write_image_to_file(world_width, world_height, 1, image, "solids.png");
+
 			std::vector<int> candidates(world_width * world_height);
 			assert(cudaSuccess == cudaMemcpy(candidates.data(), d_candidates, sizeof(int) * candidates.size(), cudaMemcpyDeviceToHost));
+
+			std::transform(candidates.begin(), candidates.end(), image.begin(), [](int s) { return s / 2.0f; });
+			write_image_to_file(world_width, world_height, 1, image, "candidates.png");
 
 			std::pair<int, int> weight_coord = findValidWeightCoord(solids, candidates);
 
@@ -381,6 +387,9 @@ int main() {
 			std::fill(weights.begin(), weights.end(), 0.0);
 			weights[IDX(std::get<0>(weight_coord), std::get<1>(weight_coord))] = 1.0;
 
+			std::transform(weights.begin(), weights.end(), image.begin(), [](double w) { return w; });
+			write_image_to_file(world_width, world_height, 1, image, "weights_pre_blur.png");
+
 			assert(cudaSuccess == cudaMemcpy(d_weights_src, weights.data(), sizeof(double) * weights.size(), cudaMemcpyHostToDevice));
 		}
 
@@ -389,6 +398,15 @@ int main() {
 			assert(cudaSuccess == cudaGetLastError());
 			assert(cudaSuccess == cudaDeviceSynchronize());
 
+			std::vector<float> image(world_width * world_height);
+			std::vector<double> weights(world_width * world_height);
+			assert(cudaSuccess == cudaMemcpy(weights.data(), d_weights_src, sizeof(double) * weights.size(), cudaMemcpyDeviceToHost));
+			double max = *std::max_element(weights.begin(), weights.end());
+			std::transform(weights.begin(), weights.end(), image.begin(), [max](double w) { return w / max; });
+			std::stringstream ss{};
+			ss << "weights_in_blur_iter_" << std::setw(6) << std::setfill('0') << blur_iter + 1 << ".png";
+			write_image_to_file(world_width, world_height, 1, image, ss.str());
+
 			std::swap(d_weights_src, d_weights_dst);
 		}
 
@@ -396,8 +414,16 @@ int main() {
 			std::vector<double> weights(world_width * world_height);
 			assert(cudaSuccess == cudaMemcpy(weights.data(), d_weights_src, sizeof(double) * weights.size(), cudaMemcpyDeviceToHost));
 
+			std::vector<float> image(world_width * world_height);
+			double max = *std::max_element(weights.begin(), weights.end());
+			std::transform(weights.begin(), weights.end(), image.begin(), [max](double w) { return w / max; });
+			write_image_to_file(world_width, world_height, 1, image, "weights_post_blur.png");
+
 			std::vector<int> candidates(world_width * world_height);
 			assert(cudaSuccess == cudaMemcpy(candidates.data(), d_candidates, sizeof(int) * candidates.size(), cudaMemcpyDeviceToHost));
+
+			std::transform(candidates.begin(), candidates.end(), image.begin(), [](int s) { return s / 2.0f; });
+			write_image_to_file(world_width, world_height, 1, image, "candidates_post_blur.png");
 
 
 			double sum = 0.0;
@@ -428,9 +454,7 @@ int main() {
 
 			solids[IDX(std::get<0>(selected_coord), std::get<1>(selected_coord))] = 1;
 
-			std::vector<uint8_t> image(world_width * world_height);
 			std::transform(solids.begin(), solids.end(), image.begin(), [](int s) { return static_cast<uint8_t>((1 - s) * 3 + s * 240); });
-
 			std::stringstream ss{};
 			ss << "sim\\iter " << std::setw(6) << std::setfill('0') << particle_iter + 1 << ".png";
 			write_image_to_file(world_width, world_height, 1, image, ss.str());
@@ -459,7 +483,7 @@ __global__ void _kernel_calc_candidates(
 
 #define IDX(idx_x, idx_y) (width * (idx_y) + (idx_x))
 
-	candidates_out[IDX(x, y)] = 0;
+	candidates_out[IDX(x, y)] = 2;
 	if (solids[IDX(x, y)] == 1) return;
 
 	if (x > 0)				if (solids[IDX(x - 1, y)] == 1) candidates_out[IDX(x, y)] = 1;
@@ -499,12 +523,12 @@ __global__ void _kernel_calc_neighbour_distribs(
 
 	int neighbour_count = 0;
 
-	if (x > 0)				if (solids[IDX(x - 1, y)] == 0) neighbour_count++;
-	if (x <= width - 1)		if (solids[IDX(x + 1, y)] == 0) neighbour_count++;
-	if (y > 0)				if (solids[IDX(x, y - 1)] == 0) neighbour_count++;
-	if (y <= height - 1)	if (solids[IDX(x, y + 1)] == 0) neighbour_count++;
+	if (x > 0)				if (solids[IDX(x - 1, y)] != 1) neighbour_count++;
+	if (x <= width - 1)		if (solids[IDX(x + 1, y)] != 1) neighbour_count++;
+	if (y > 0)				if (solids[IDX(x, y - 1)] != 1) neighbour_count++;
+	if (y <= height - 1)	if (solids[IDX(x, y + 1)] != 1) neighbour_count++;
 
-	neighbours_distrib_out[IDX(x, y)] = 1.0 / neighbour_count;
+	neighbours_distrib_out[IDX(x, y)] = 1.0 / (double)neighbour_count;
 }
 
 __global__ void _kernel_blur_iteration(
