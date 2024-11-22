@@ -336,7 +336,7 @@ void saveWorldToImage(World& world, std::string path) {
 
 int main() {
 
-	int world_width = 200;
+	int world_width = 80;
 	int world_height = world_width;
 	int blur_iterations = std::max(world_width, world_height) * 2;
 	int particle_additions = std::min(world_width, world_height) * 10;
