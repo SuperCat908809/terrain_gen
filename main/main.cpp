@@ -316,7 +316,7 @@ int main() {
 	int world_width = 80;
 	int world_height = 80;
 	int blur_iterations = 200;
-	int particle_additions = 40;
+	int particle_additions = 200;
 
 	World world(world_width, world_height);
 
