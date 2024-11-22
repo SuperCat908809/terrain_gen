@@ -18,6 +18,13 @@
 #include <stb_image_write.h>
 
 
+
+const int world_width = 80;
+const int world_height = 80;
+const int blur_iterations = 200;
+const int particle_additions = 200;
+
+
 __global__ void _kernel_calc_candidates(int width, int height, int* solids, int* candidates_out) {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;
 	int y = blockDim.y * blockIdx.y + threadIdx.y;
@@ -309,14 +316,7 @@ void saveWorldToImage(World& world, std::string path) {
 	stbi_write_jpg(path.c_str(), world.GetWidth(), world.GetHeight(), 3, image_data.data(), 95);
 }
 
-
-
 int main() {
-
-	int world_width = 80;
-	int world_height = 80;
-	int blur_iterations = 200;
-	int particle_additions = 200;
 
 	World world(world_width, world_height);
 
