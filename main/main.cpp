@@ -26,6 +26,12 @@ const int particle_additions = 6000;
 #define IDX(idx_x, idx_y) (world_width * (idx_y) + (idx_x))
 #define CEIL_DIV(num, denom) (((num) + (denom) - 1) / (denom))
 
+#ifdef _DEBUG
+#define CUDA_CHECK(func) (assert(cudaSuccess == (func)))
+#else
+#define CUDA_CHECK(func) (func)
+#endif
+
 const dim3 threads = dim3(8, 8);
 const dim3 blocks = dim3(CEIL_DIV(world_width, threads.x), CEIL_DIV(world_height, threads.y));
 
@@ -338,52 +344,46 @@ int main() {
 	double* d_weights_src{};
 	double* d_weights_dst{};
 
-	assert(cudaSuccess == cudaMalloc((void**)&d_solids, sizeof(int) * world_width * world_height));
-	assert(cudaSuccess == cudaMalloc((void**)&d_candidates, sizeof(int) * world_width * world_height));
-	assert(cudaSuccess == cudaMalloc((void**)&d_neighbour_distribs, sizeof(double) * world_width * world_height));
-	assert(cudaSuccess == cudaMalloc((void**)&d_weights_src, sizeof(double) * world_width * world_height));
-	assert(cudaSuccess == cudaMalloc((void**)&d_weights_dst, sizeof(double) * world_width * world_height));
+	CUDA_CHECK(cudaMalloc((void**)&d_solids, sizeof(int) * world_width * world_height));
+	CUDA_CHECK(cudaMalloc((void**)&d_candidates, sizeof(int) * world_width * world_height));
+	CUDA_CHECK(cudaMalloc((void**)&d_neighbour_distribs, sizeof(double) * world_width * world_height));
+	CUDA_CHECK(cudaMalloc((void**)&d_weights_src, sizeof(double) * world_width * world_height));
+	CUDA_CHECK(cudaMalloc((void**)&d_weights_dst, sizeof(double) * world_width * world_height));
 
-	{
-		std::vector<int> solids(world_width * world_height);
-		std::fill(solids.begin(), solids.end(), 0);
-		solids[IDX(world_width / 2, world_height / 2)] = 1;
+	std::vector<int> solids(world_width * world_height);
+	std::fill(solids.begin(), solids.end(), 0);
+	solids[IDX(world_width / 2, world_height / 2)] = 1;
+	CUDA_CHECK(cudaMemcpy(d_solids, solids.data(), sizeof(int) * solids.size(), cudaMemcpyHostToDevice));
 
-		assert(cudaSuccess == cudaMemcpy(d_solids, solids.data(), sizeof(int) * solids.size(), cudaMemcpyHostToDevice));
-	}
+	std::vector<int> candidates(world_width * world_height);
+	std::vector<double> weights(world_width * world_height);
 
 	srand(0);
 
 	for (int particle_iter = 0; particle_iter < particle_additions; particle_iter++)
 	{
 		_kernel_calc_candidates<<<blocks, threads>>>(world_width, world_height, d_solids, d_candidates);
-		assert(cudaSuccess == cudaGetLastError());
-		assert(cudaSuccess == cudaDeviceSynchronize());
+		CUDA_CHECK(cudaGetLastError());
+		CUDA_CHECK(cudaDeviceSynchronize());
 
 		_kernel_calc_neighbour_distribs<<<blocks, threads>>>(world_width, world_height, d_solids, d_candidates, d_neighbour_distribs);
-		assert(cudaSuccess == cudaGetLastError());
-		assert(cudaSuccess == cudaDeviceSynchronize());
+		CUDA_CHECK(cudaGetLastError());
+		CUDA_CHECK(cudaDeviceSynchronize());
 
-		{
-			std::vector<int> solids(world_width * world_height);
-			assert(cudaSuccess == cudaMemcpy(solids.data(), d_solids, sizeof(int) * solids.size(), cudaMemcpyDeviceToHost));
+		CUDA_CHECK(cudaMemcpy(candidates.data(), d_candidates, sizeof(int) * candidates.size(), cudaMemcpyDeviceToHost));
 
-			std::vector<int> candidates(world_width * world_height);
-			assert(cudaSuccess == cudaMemcpy(candidates.data(), d_candidates, sizeof(int) * candidates.size(), cudaMemcpyDeviceToHost));
+		std::pair<int, int> weight_coord = findValidWeightCoord(solids, candidates);
 
-			std::pair<int, int> weight_coord = findValidWeightCoord(solids, candidates);
-
-			if (std::get<0>(weight_coord) == -1) {
-				std::cout << "Couldn't find valid weight starting point\n";
-				exit(-1);
-			}
-
-			std::vector<double> weights(world_width * world_height);
-			std::fill(weights.begin(), weights.end(), 0.0);
-			weights[IDX(std::get<0>(weight_coord), std::get<1>(weight_coord))] = 1.0;
-
-			assert(cudaSuccess == cudaMemcpy(d_weights_src, weights.data(), sizeof(double) * weights.size(), cudaMemcpyHostToDevice));
+		if (std::get<0>(weight_coord) == -1) {
+			std::cout << "Couldn't find valid weight starting point\n";
+			exit(-1);
 		}
+
+		std::fill(weights.begin(), weights.end(), 0.0);
+		weights[IDX(std::get<0>(weight_coord), std::get<1>(weight_coord))] = 1.0;
+
+		CUDA_CHECK(cudaMemcpy(d_weights_src, weights.data(), sizeof(double) * weights.size(), cudaMemcpyHostToDevice));
+
 
 		for (int blur_iter = 0; blur_iter < blur_iterations; blur_iter++) {
 			_kernel_blur_iteration<<<blocks, threads>>>(world_width, world_height, d_solids, d_candidates, d_neighbour_distribs, d_weights_src, d_weights_dst);
@@ -391,81 +391,76 @@ int main() {
 			std::swap(d_weights_src, d_weights_dst);
 		}
 
-		assert(cudaSuccess == cudaGetLastError());
-		assert(cudaSuccess == cudaDeviceSynchronize());
+		CUDA_CHECK(cudaGetLastError());
+		CUDA_CHECK(cudaDeviceSynchronize());
 
-		{
-			std::vector<double> weights(world_width * world_height);
-			assert(cudaSuccess == cudaMemcpy(weights.data(), d_weights_src, sizeof(double) * weights.size(), cudaMemcpyDeviceToHost));
 
-			std::vector<int> candidates(world_width * world_height);
-			assert(cudaSuccess == cudaMemcpy(candidates.data(), d_candidates, sizeof(int) * candidates.size(), cudaMemcpyDeviceToHost));
+		CUDA_CHECK(cudaMemcpy(weights.data(), d_weights_src, sizeof(double) * weights.size(), cudaMemcpyDeviceToHost));
+		CUDA_CHECK(cudaMemcpy(candidates.data(), d_candidates, sizeof(int) * candidates.size(), cudaMemcpyDeviceToHost));
 
-			double sum = 0.0;
-			double selected_weight = 0.0;
-			auto selected_coord = std::make_pair(-1, -1);
+		double sum = 0.0;
+		double selected_weight = 0.0;
+		auto selected_coord = std::make_pair(-1, -1);
 
-			for (int y = 0; y < world_height; y++) {
-				for (int x = 0; x < world_width; x++) {
-					if (candidates[IDX(x, y)] != 1) continue;
+		for (int y = 0; y < world_height; y++) {
+			for (int x = 0; x < world_width; x++) {
+				if (candidates[IDX(x, y)] != 1) continue;
 
-					double candidate_weight = weights[IDX(x, y)];
-					sum += candidate_weight;
+				double candidate_weight = weights[IDX(x, y)];
+				sum += candidate_weight;
 					
-					double select_candidate_probability = candidate_weight / sum;
-					double decision = rand() / (double)RAND_MAX;
+				double select_candidate_probability = candidate_weight / sum;
+				double decision = rand() / (double)RAND_MAX;
 
-					if (decision < select_candidate_probability) {
-						selected_weight = candidate_weight;
-						selected_coord = std::make_pair(x, y);
-					}
+				if (decision < select_candidate_probability) {
+					selected_weight = candidate_weight;
+					selected_coord = std::make_pair(x, y);
 				}
 			}
-
-			assert(std::get<0>(selected_coord) != -1);
-
-			std::vector<int> solids(world_width * world_height);
-			assert(cudaSuccess == cudaMemcpy(solids.data(), d_solids, sizeof(int) * solids.size(), cudaMemcpyDeviceToHost));
-
-			solids[IDX(std::get<0>(selected_coord), std::get<1>(selected_coord))] = 1;
-
-
-			assert(cudaSuccess == cudaMemcpy(weights.data(), d_weights_src, sizeof(double) * world_width * world_height, cudaMemcpyDeviceToHost));
-			std::vector<float> byte_image{};
-			double max = *std::max_element(weights.begin(), weights.end());
-			for (int i = 0; i < world_width * world_height; i++) {
-				double weight = weights[i];
-				int solid = solids[i];
-
-				if (solid == 1) {
-					byte_image.push_back(1.0);
-					byte_image.push_back(1.0);
-					byte_image.push_back(1.0);
-					continue;
-				}
-
-				double factor = std::clamp(weight / max, 0.0, 1.0);
-				factor = (1 - factor) * 0.00 + factor * 1.00;
-
-				byte_image.push_back(factor * 0.95);
-				byte_image.push_back(factor * 0.25);
-				byte_image.push_back(factor * 0.95);
-			}
-			std::stringstream ss1{};
-			ss1 << "sim\\iter " << std::setw(6) << std::setfill('0') << particle_iter + 1 << ".png";
-			write_image_to_file(world_width, world_height, 3, byte_image, ss1.str());
-
-			assert(cudaSuccess == cudaMemcpy(d_solids, solids.data(), sizeof(int) * solids.size(), cudaMemcpyHostToDevice));
-
-			std::cout << "Finished particle " << particle_iter + 1 << "\n";
 		}
+
+		assert(std::get<0>(selected_coord) != -1);
+
+		CUDA_CHECK(cudaMemcpy(solids.data(), d_solids, sizeof(int) * solids.size(), cudaMemcpyDeviceToHost));
+
+		solids[IDX(std::get<0>(selected_coord), std::get<1>(selected_coord))] = 1;
+
+
+		CUDA_CHECK(cudaMemcpy(weights.data(), d_weights_src, sizeof(double) * world_width * world_height, cudaMemcpyDeviceToHost));
+		std::vector<float> byte_image{};
+		double max = *std::max_element(weights.begin(), weights.end());
+		for (int i = 0; i < world_width * world_height; i++) {
+			double weight = weights[i];
+			int solid = solids[i];
+
+			if (solid == 1) {
+				byte_image.push_back(1.0);
+				byte_image.push_back(1.0);
+				byte_image.push_back(1.0);
+				continue;
+			}
+
+			double factor = std::clamp(weight / max, 0.0, 1.0);
+			factor = (1 - factor) * 0.00 + factor * 1.00;
+
+			byte_image.push_back(factor * 0.95);
+			byte_image.push_back(factor * 0.25);
+			byte_image.push_back(factor * 0.95);
+		}
+		std::stringstream ss1{};
+		ss1 << "sim\\iter " << std::setw(6) << std::setfill('0') << particle_iter + 1 << ".png";
+		write_image_to_file(world_width, world_height, 3, byte_image, ss1.str());
+
+		CUDA_CHECK(cudaMemcpy(d_solids, solids.data(), sizeof(int) * solids.size(), cudaMemcpyHostToDevice));
+
+		std::cout << "Finished particle " << particle_iter + 1 << "\n";
 	}
 
-	assert(cudaSuccess == cudaFree(d_solids));
-	assert(cudaSuccess == cudaFree(d_candidates));
-	assert(cudaSuccess == cudaFree(d_neighbour_distribs));
-	assert(cudaSuccess == cudaFree(d_weights_src));
-	assert(cudaSuccess == cudaFree(d_weights_dst));
+	CUDA_CHECK(cudaFree(d_solids));
+	CUDA_CHECK(cudaFree(d_candidates));
+	CUDA_CHECK(cudaFree(d_neighbour_distribs));
+	CUDA_CHECK(cudaFree(d_weights_src));
+	CUDA_CHECK(cudaFree(d_weights_dst));
 }
 
 __global__ void _kernel_calc_candidates(
