@@ -8,33 +8,85 @@
 #include <concepts>
 #include <algorithm>
 
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+
 #define __STDC_LIB_EXT1__
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image.h>
 #include <stb_image_write.h>
 
+
+__global__ void _kernel_calc_candidates(int width, int height, int* solids, int* candidates_out) {
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	if (x >= width || y >= height) return;
+
+#define IDX(idx_x, idx_y) (width * (idx_y) + (idx_x))
+
+	candidates_out[IDX(x, y)] = 0;
+	if (solids[IDX(x, y)] == 1)return;
+
+	if (x > 0)				if (solids[IDX(x - 1, y)] == 1) candidates_out[IDX(x, y)] = 1;
+	if (x <= width - 1)		if (solids[IDX(x + 1, y)] == 1) candidates_out[IDX(x, y)] = 1;
+	if (y > 0)				if (solids[IDX(x, y - 1)] == 1) candidates_out[IDX(x, y)] = 1;
+	if (y <= height - 1)	if (solids[IDX(x, y + 1)] == 1) candidates_out[IDX(x, y)] = 1;
+		}
+
+__global__ void _kernel_calc_neighbour_distribs(int width, int height, int* solids, int* candidates, double* weights, double* neighbours_distrib_out) {
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	if (x >= width || y >= height) return;
+
+#define IDX(idx_x, idx_y) (width * (idx_y) + (idx_x))
+
+	neighbours_distrib_out[IDX(x, y)] = 0.0;
+	if (solids[IDX(x, y)] == 1) return;
+	if (candidates[IDX(x, y)] == 1) return;
+
+	int neighbour_count = 0;
+
+	if (x > 0)				if (solids[IDX(x - 1, y)] == 0) neighbour_count++;
+	if (x <= width - 1)		if (solids[IDX(x + 1, y)] == 0) neighbour_count++;
+	if (y > 0)				if (solids[IDX(x, y - 1)] == 0) neighbour_count++;
+	if (y <= height - 1)	if (solids[IDX(x, y + 1)] == 0) neighbour_count++;
+
+	neighbours_distrib_out[IDX(x, y)] = weights[IDX(x, y)] / neighbour_count;
+		}
+
+__global__ void _kernel_blur_iteration(
+	int width, int height,
+	int* solids,
+	int* candidates,
+	double* neighbour_distribs,
+	double* weights_in,
+	double* weights_out
+) {
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	if (x >= width || y >= height) return;
+
+#define IDX(idx_x, idx_y) (width * (idx_y) + (idx_x))
+
+	if (solids[IDX(x, y)] == 1) return;
+
+	double new_weight = 0.0;
+
+	if (candidates[IDX(x, y)] == 1) new_weight += weights_in[IDX(x, y)];
+
+	if (x > 0)				new_weight += neighbour_distribs[IDX(x-1,y)];
+	if (x <= width - 1)		new_weight += neighbour_distribs[IDX(x+1,y)];
+	if (y > 0)				new_weight += neighbour_distribs[IDX(x,y-1)];
+	if (y <= height - 1)	new_weight += neighbour_distribs[IDX(x,y+1)];
+
+	weights_out[IDX(x, y)] = new_weight;
+	}
+
 class World {
 	int width, height;
 	std::vector<double> current{}, next{};
 	std::vector<int> solids{};
-
-#if 0
-	template <typename Func, typename... Args> requires std::invocable<Func, Args...>
-	void iterateOverNeighbours(int x, int y, Args... args) {
-		assert(0 <= x && x < width);
-		assert(0 <= y && y < height);
-
-		for (int dx = std::max(0, x - 1); dx <= std::min(x + 1, width - 1); dx++) {
-			if (dx == x) continue;
-			Func(args...);
-		}
-		for (int dy = std::max(0, y - 1); dy <= std::min(y + 1, height - 1); dy++) {
-			if (dy == y) continue;
-			Func(args...);
-		}
-	}
-#endif
 
 	int getNeighbourCount(int x, int y) {
 		assert(0 <= x && x < width);
