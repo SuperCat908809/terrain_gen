@@ -20,8 +20,8 @@
 
 const int world_width = 200;
 const int world_height = 200;
-const int blur_iterations = 2000;
-const int particle_additions = 6000;
+const int blur_iterations = 200;
+const int particle_additions = 4;
 
 #define IDX(idx_x, idx_y) (world_width * (idx_y) + (idx_x))
 #define CEIL_DIV(num, denom) (((num) + (denom) - 1) / (denom))
@@ -461,6 +461,12 @@ int main() {
 	CUDA_CHECK(cudaFree(d_neighbour_distribs));
 	CUDA_CHECK(cudaFree(d_weights_src));
 	CUDA_CHECK(cudaFree(d_weights_dst));
+
+	CUDA_CHECK(cudaDeviceReset());
+
+	std::cout << "\n\nFinished.\n";
+
+	return 0;
 }
 
 __global__ void _kernel_calc_candidates(
